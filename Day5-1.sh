@@ -20,7 +20,7 @@ function analyze_log {
     local file=$1
     local total_requests=$(wc -l < "$file")
     local unique_ips=$(awk '{print $1}' "$file" | sort -u | wc -l)
-    local most_requested_url=$(awk '{print $5}' "$file" | sed 's/^"[^ ]* //; s/ HTTP\/.*$//' | sort | uniq -c | sort -nr | head -n 1 | awk '{print $2}')
+    local most_requested_url=$(awk '{print $7}' "$file" | sort | uniq -c | sort -nr | head -n 1 | awk '{print $2}')
     local total_404_errors=$(grep -c '404' "$file")
     local top_ips=$(awk '{print $1}' "$file" | sort | uniq -c | sort -nr | head -n 5)
 
