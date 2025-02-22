@@ -40,4 +40,9 @@ echo "✅ All Terraform state files have been processed!"
 echo "✅ Opening State files in VS..."
 cd terraform_states && code .
 
+# To patch the state make the cahnge locally in VS
+# cat state*.json | gzip | base64 > state_encoded.txt
+# kubectl patch secret tfstate-default-*-state -n kube-system --type='json' -p="[{'op': 'replace', 'path': '/data/tfstate', 'value': '$(cat state_encoded.txt)'}]"
+
+
 
