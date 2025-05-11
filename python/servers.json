@@ -1,0 +1,28 @@
+{
+    "servers": [
+        {
+            "name": "web-server-1",
+            "ip": "192.168.1.10",
+            "status": "running",
+            "role": "web"
+        },
+        {
+            "name": "db-server-1",
+            "ip": "192.168.1.20",
+            "status": "stopped",
+            "role": "database"
+        },
+        {
+            "name": "app-server-1",
+            "ip": "192.168.1.30",
+            "status": "running",
+            "role": "application"
+        },
+        {
+            "name": "web-server-2",
+            "ip": "192.168.1.11",
+            "status": "running",
+            "role": "web"
+        }
+    ]
+}
