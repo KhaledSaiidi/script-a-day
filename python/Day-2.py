@@ -1,4 +1,5 @@
-# extracts error messages from log files (e.g., server1.log, server2.log) entries in the format: YYYY-MM-DD HH:MM:SS LOG_LEVEL message
+# Extract Python error messages from log files by timestamp and log level
+
 import glob
 from datetime import datetime
 

@@ -56,7 +56,6 @@ download_kubeconfig() {
 
     echo "✅ Kubeconfig downloaded. Updating names to: ${project}"
 
-    # Use sed to replace names regardless of format
     sed -i \
         -e "s/name: microk8s-cluster/name: ${project}/" \
         -e "s/name: microk8s/name: ${project}/" \
@@ -105,7 +104,6 @@ merge_kubeconfig() {
 }
 
 
-# Validate input
 if [[ $# -lt 1 ]]; then
     echo "Usage: $0 <GitLab Job URL (without artifact path)>"
     echo "Example: $0 https://gitlab.ccdev.drpp-onprem.global/iac/mw-dev/-/jobs/21603"
@@ -115,6 +113,11 @@ fi
 
 BASE_JOB_URL="$1"
 project=$(extract_project_name "$BASE_JOB_URL")
+cleanup() {
+    [[ -f "/tmp/${project}" ]] && rm -f "/tmp/${project}"
+    [[ -f "/tmp/merged-kubeconfig" ]] && rm -f "/tmp/merged-kubeconfig"
+}
+trap cleanup EXIT
 download_kubeconfig "$BASE_JOB_URL"
 merge_kubeconfig "/tmp/${project}" "${project}"
 
