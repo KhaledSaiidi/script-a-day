@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-NetBird Environment Switcher
+NetBird Environment Switcher (Linux-only, runs as normal user)
 """
 
 import os, sys, re, json, subprocess, threading, time, shutil
@@ -10,7 +10,6 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 APP_DIR = Path(sys.argv[0]).resolve().parent
 ENVS_PATH = APP_DIR / "envs.json"
-ELEVATION_FLAG = "--elevated"
 
 # Hide noisy QPainter warnings (harmless)
 def _qt_msg_handler(mode, ctx, msg):
@@ -20,45 +19,11 @@ QtCore.qInstallMessageHandler(_qt_msg_handler)
 
 QtWidgets.QApplication.setStyle("Fusion")
 
-# ---------- elevation ----------
-def is_admin():
-    if sys.platform.startswith("win"):
-        try:
-            import ctypes
-            return bool(ctypes.windll.shell32.IsUserAnAdmin())
-        except Exception:
-            return False
-    try:
-        return os.geteuid() == 0
-    except AttributeError:
-        return False
-
-def elevate_self():
-    script = str(Path(sys.argv[0]).resolve())
-    args = [a for a in sys.argv[1:] if a != ELEVATION_FLAG] + [ELEVATION_FLAG]
-    if sys.platform.startswith("win"):
-        try:
-            import ctypes
-            params = " ".join(f'"{a}"' for a in [script] + args)
-            ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, params, None, 1)
-            return True
-        except Exception:
-            return False
-    if sys.platform == "darwin":
-        py = sys.executable.replace('"', '\\"'); sc = script.replace('"', '\\"')
-        arg_str = " ".join(a.replace('"', '\\"') for a in args)
-        osa = f'do shell script "{py} \\"{sc}\\" {arg_str}" with administrator privileges'
-        try:
-            subprocess.Popen(["osascript", "-e", osa]); return True
-        except Exception:
-            return False
-    pk = shutil.which("pkexec")
-    if pk:
-        try:
-            subprocess.Popen([pk, sys.executable, script] + args); return True
-        except Exception:
-            return False
-    return False
+# ---------- platform check (Linux-only) ----------
+def _require_linux_or_exit():
+    if not sys.platform.startswith("linux"):
+        QtWidgets.QMessageBox.critical(None, "Unsupported OS", "This application supports Linux only.")
+        sys.exit(1)
 
 # ---------- CLI ----------
 def run_cmd(cmd: str, timeout: int = 60):
@@ -68,26 +33,63 @@ def run_cmd(cmd: str, timeout: int = 60):
     except Exception as e:
         return 255, "", str(e)
 
-def nb_service_start(): return run_cmd("netbird service start")
+def nb_service_start(): return run_cmd("netbird service start", timeout=10)
 def nb_down(): return run_cmd("netbird down")
-def nb_up(url: str): return run_cmd(f'netbird up --management-url "{url}"')
 def nb_status(detail: bool = True):
     return run_cmd(f"netbird status{' -d' if detail else ''}")
+
+def nb_up_async(url: str):
+    """
+    """
+    args = ["netbird", "up", "--management-url", url]
+    
+    try:
+        return subprocess.Popen(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1
+        )
+    except Exception:
+        return None
 
 def parse_mgmt_url(text: str):
     m = re.search(r"Management:\s*Connected(?:\s*to)?\s*(https?://[^\s]+)", text, re.IGNORECASE)
     return m.group(1) if m else None
+
+def _pump_proc_output(proc: subprocess.Popen, bus: "UIBus"):
+    """
+    Stream netbird's stdout (merged with stderr) into the Activity Log and
+    auto-open the first https:// URL via xdg-open.
+    """
+    opened = False
+    try:
+        for raw in iter(proc.stdout.readline, ''):
+            line = raw.rstrip("\r\n")
+            if not line:
+                continue
+            bus.log.emit(line)
+            if not opened:
+                m = re.search(r'(https://\S+)', line)
+                if m:
+                    try:
+                        subprocess.Popen(
+                            ["xdg-open", m.group(1)],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL
+                        )
+                    except Exception:
+                        pass
+                    opened = True
+    except Exception as e:
+        bus.log.emit(f"! output stream error: {e}")
 
 # ---------- networks ----------
 def networks_select_all():
     """
     Select all networks by parsing 'netbird networks list' and feeding the
     resulting *network IDs* to 'netbird networks select'.
-
-    Strategy:
-      1) Prefer key-value lines containing 'ID: <id>'.
-      2) Else, detect a table header row containing 'ID' and use that column.
-      3) Never use values after 'Network:' (often CIDR/IP).
     """
     rc, out, err = run_cmd("netbird networks list")
     if rc != 0:
@@ -135,13 +137,11 @@ def networks_select_all():
                             ids.append(tok)
                 break
 
-    # De-dup while preserving order (fixed for Py3.12 scoping)
-    seen = set()
-    uniq = []
+    # De-dup while preserving order
+    seen = set(); uniq = []
     for i in ids:
         if i not in seen:
-            seen.add(i)
-            uniq.append(i)
+            seen.add(i); uniq.append(i)
     ids = uniq
 
     if not ids:
@@ -163,8 +163,7 @@ def networks_refresh():
     def looks_like_help(s: str) -> bool:
         return bool(s) and "Usage:" in s and "netbird networks" in s
 
-    # Clean noisy help output if the command actually succeeded
-    if rc == 0 and looks_like_help(out):
+    if rc == 0 and looks_like_help(out):  # Clean noisy help output
         out = ""
     return rc, out, err
 
@@ -217,7 +216,7 @@ class EnvCard(QtWidgets.QFrame):
     def setActive(self, v): self.active = v; self.badge.setVisible(v); self.badge.setText("Active" if v else ""); self._apply_style(False)
     def enterEvent(self, e): self._apply_style(True);  super().enterEvent(e)
     def leaveEvent(self, e): self._apply_style(False); super().leaveEvent(e)
-    def mouseReleaseEvent(self, e): 
+    def mouseReleaseEvent(self, e):
         if e.button() == QtCore.Qt.LeftButton: self.clicked.emit()
         super().mouseReleaseEvent(e)
     def _apply_style(self, hover):
@@ -291,7 +290,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.active_name = None
         self.bus = UIBus()
         self._apply_dark_palette(); self._build(); self._wire_bus()
-        self._maybe_prompt_elevate(); self._load_envs_initial()
+        self._load_envs_initial()
 
     # wire signals
     def _wire_bus(self):
@@ -329,6 +328,11 @@ class MainWindow(QtWidgets.QMainWindow):
             QPushButton { background:#11161d; color:#e5e7eb; border:1px solid #2a3242; border-radius:10px; padding:10px 14px; }
             QPushButton:hover { background:#151b24; }
             QDialog { background:#0d1117; }
+
+            /* Ensure scroll area, its viewport and content are all dark */
+            QScrollArea { border:1px solid #2a3242; border-radius:10px; background:#0f141b; }
+            QScrollArea > QWidget { background:#0f141b; }                 /* viewport */
+            QScrollArea > QWidget > QWidget { background:#0f141b; }       /* inner host */
         """)
 
     def _build(self):
@@ -352,8 +356,9 @@ class MainWindow(QtWidgets.QMainWindow):
         # Middle
         middle = QtWidgets.QHBoxLayout(); middle.setSpacing(14)
         self.cards_container = QtWidgets.QWidget()
+        self.cards_container.setStyleSheet("background:#0f141b;")
         self.cards_layout = QtWidgets.QVBoxLayout(self.cards_container); self.cards_layout.setContentsMargins(6, 6, 6, 6); self.cards_layout.setSpacing(10)
-        scroll = QtWidgets.QScrollArea(); scroll.setWidgetResizable(True); scroll.setWidget(self.cards_container); scroll.setStyleSheet("QScrollArea{border:1px solid #2a3242; border-radius:10px; background:#0f141b;}")
+        scroll = QtWidgets.QScrollArea(); scroll.setWidgetResizable(True); scroll.setWidget(self.cards_container)
         middle.addWidget(scroll, 1)
 
         right = QtWidgets.QVBoxLayout()
@@ -388,16 +393,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
         QtGui.QShortcut(QtGui.QKeySequence("Return"), self, activated=self.on_connect)
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+F"), self, activated=self.search.setFocus)
-
-    # elevation prompt
-    def _maybe_prompt_elevate(self):
-        if ELEVATION_FLAG in sys.argv or is_admin(): return
-        msg = ("To manage the NetBird service, elevated privileges are recommended.\n\nRelaunch the app with admin/root privileges?")
-        if ask_yes_no(self, "Administrator privileges", msg, default_yes=True) == QtWidgets.QMessageBox.Yes:
-            if elevate_self():
-                QtCore.QTimer.singleShot(50, QtWidgets.QApplication.instance().quit)
-            else:
-                warn_box(self, "Relaunch failed", "Auto-elevation is not available. Please reopen as admin/root.")
 
     # ----- load/render -----
     def _load_envs_initial(self):
@@ -448,7 +443,6 @@ class MainWindow(QtWidgets.QMainWindow):
             time.sleep(step)
 
     def _run_bg(self, fn):
-        # never touch UI here; use bus signals
         self.bus.set_enabled.emit(False)
         def wrapper():
             try:
@@ -563,37 +557,63 @@ class MainWindow(QtWidgets.QMainWindow):
         name, url = env["name"], env["management_url"]
         def work():
             self.bus.pill.emit("Connecting…", "#0ea5a0"); self.bus.log.emit(f"Connecting to {name} ...")
+
+            # Try to start the service (may require root on some setups)
             rc, out, err = nb_service_start()
-            if rc == 0: self.bus.log.emit("✓ Service started (or already running).")
-            elif "already running" in (err or out): self.bus.log.emit("i Service is already running.")
-            else: self.bus.log.emit(f"service start (rc={rc}): {err or out}")
+            if rc == 0:
+                self.bus.log.emit("✓ Service started (or already running).")
+            else:
+                self.bus.log.emit("i Could not start service as normal user (this is OK if it's already running).")
+                if err or out:
+                    self.bus.log.emit((err or out))
+                self.bus.log.emit("i If needed, start it manually: sudo netbird service start")
+
             self.bus.log.emit("Resetting session...")
             self._ensure_down_quick(max_wait=2.0, step=0.2)
-            rc, out, err = nb_up(url)
-            if rc == 0:
-                self.bus.log.emit("✓ up OK. Waiting for authentication/handshake...")
-                mgmt = None
-                for _ in range(60):
-                    time.sleep(1)
-                    rc2, out2, err2 = nb_status(True)
-                    if rc2 == 0:
-                        mgmt = parse_mgmt_url(out2)
-                        if mgmt: break
-                if mgmt:
-                    self.bus.pill.emit("Connected", "#10b981"); self.bus.log.emit(f"✓ Connected to: {mgmt}")
-                    self.bus.set_active.emit(self.selected_name)
-                else:
-                    self.bus.pill.emit("Connected?", "#f59e0b"); self.bus.log.emit("i No management URL detected yet. Sign-in window may still be open.")
+
+            # Launch `up` without waiting so the browser can open
+            proc = nb_up_async(url)
+            if not proc:
+                self.bus.pill.emit("Error", "#ef4444")
+                self.bus.log.emit("! Failed to launch `netbird up`.")
+                return
+
+            # start output streaming in background
+            threading.Thread(target=_pump_proc_output, args=(proc, self.bus), daemon=True).start()
+            # Poll up to 3 minutes for connection
+            mgmt = None
+            for _ in range(180):
+                time.sleep(1)
+                rc2, out2, err2 = nb_status(True)
+                if rc2 == 0:
+                    mgmt = parse_mgmt_url(out2)
+                    if mgmt: break
+
+            # Best-effort: drain any output from the `up` command if it ended
+            try:
+                if proc.poll() is not None:
+                    out_up, err_up = proc.communicate(timeout=0.25)
+                    if out_up: self.bus.log.emit(out_up)
+                    if err_up: self.bus.log.emit(err_up)
+            except Exception:
+                pass
+
+            if mgmt:
+                self.bus.pill.emit("Connected", "#10b981"); self.bus.log.emit(f"✓ Connected to: {mgmt}")
+                self.bus.set_active.emit(self.selected_name)
             else:
-                self.bus.pill.emit("Error", "#ef4444"); self.bus.log.emit(f"up failed (rc={rc}): {err or out}")
+                self.bus.pill.emit("Connected?", "#f59e0b")
+                self.bus.log.emit("i No management URL detected yet. If your browser didn't open, run the same command in a terminal:")
+                self.bus.log.emit(f'netbird up --management-url "{url}"')
+
         self._run_bg(work)
 
 def main():
     app = QtWidgets.QApplication(sys.argv)
     app.setWindowIcon(make_app_icon())
+    _require_linux_or_exit()   # Linux-only; no root requirement
     win = MainWindow(); win.show()
     sys.exit(app.exec())
 
 if __name__ == "__main__":
     main()
-
