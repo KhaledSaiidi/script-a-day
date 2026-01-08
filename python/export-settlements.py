@@ -156,29 +156,26 @@ def main() -> int:
         print("Missing GMAIL_APP_PASSWORD; skipping email send.", file=sys.stderr)
         return 0
 
-    common_attachments = [bilateral_pdf, bilateral_csv, bilateral_json]
-    fsp_pairs = [(fsp_id_1, dfsp_pdf_1), (fsp_id_2, dfsp_pdf_2)]
-    if fsp_id_3 and dfsp_pdf_3:
-        fsp_pairs.append((fsp_id_3, dfsp_pdf_3))
+    attachments = [bilateral_pdf, bilateral_csv, bilateral_json, dfsp_pdf_1, dfsp_pdf_2]
+    if dfsp_pdf_3:
+        attachments.append(dfsp_pdf_3)
 
-    for fsp_id, dfsp_pdf in fsp_pairs:
-        subject = f"{settlement_date} {fsp_id} settlement report approval"
-        body = (
-            f"{fsp_id} attached the settlement report for the "
-            f"{settlement_date} settlement window approval"
-        )
-        attachments = common_attachments + [dfsp_pdf]
-        send_email(
-            smtp_host=smtp_host,
-            smtp_port=smtp_port,
-            username=username,
-            password=password,
-            sender=sender,
-            recipient=recipient,
-            subject=subject,
-            body=body,
-            attachments=attachments,
-        )
+    subject = f"{settlement_date} settlement report {settlement_id} approval"
+    body = (
+        f"attached the settlement report  {settlement_id}  for the "
+        f"{settlement_date} settlement window approval"
+    )
+    send_email(
+        smtp_host=smtp_host,
+        smtp_port=smtp_port,
+        username=username,
+        password=password,
+        sender=sender,
+        recipient=recipient,
+        subject=subject,
+        body=body,
+        attachments=attachments,
+    )
 
     return 0
 
